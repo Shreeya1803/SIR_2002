@@ -3,6 +3,7 @@ from flask_cors import CORS
 import sqlite3
 import json
 import os
+import tempfile
 
 from database import init_db, DB_PATH
 from parser import parse_excel
@@ -15,13 +16,13 @@ def normalize_key(key):
 app = Flask(__name__)
 CORS(app)
 
-UPLOAD_FOLDER = "uploads"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+# 🔥 Limit file size (16MB)
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
 # Init DB
 init_db()
 
-# 🔥 FIXED COLUMN ORDER (IMPORTANT)
+# 🔥 FIXED COLUMN ORDER
 COLUMN_MAPPING = [
     "Epic No.",
     "Junnar",
@@ -38,56 +39,74 @@ COLUMN_MAPPING = [
     "House No"
 ]
 
-
 # ─────────────────────────────────────────
-# 📂 UPLOAD EXCEL
+# 📂 UPLOAD EXCEL (FIXED)
 # ─────────────────────────────────────────
 @app.route("/upload", methods=["POST"])
 def upload():
+
+    # 🔍 Debug logs (IMPORTANT)
+    print("FILES:", request.files)
 
     if "file" not in request.files:
         return jsonify({"error": "No file provided"}), 400
 
     file = request.files["file"]
 
-    if not file.filename.endswith((".xlsx", ".xls")):
-        return jsonify({"error": "Only Excel files allowed"}), 400
+    # 🔥 FIX: Remove strict extension check
+    if file.filename == "":
+        return jsonify({"error": "Invalid file"}), 400
 
-    filepath = os.path.join(UPLOAD_FOLDER, file.filename)
-    file.save(filepath)
+    try:
+        # 🔥 Use temp file (Render-safe)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+            file.save(tmp.name)
+            filepath = tmp.name
 
-    columns, rows = parse_excel(filepath)
+        # Parse Excel
+        columns, rows = parse_excel(filepath)
 
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-
-    cur.execute(
-        "INSERT INTO sheets (filename, columns) VALUES (?, ?)",
-        (file.filename, json.dumps(columns, ensure_ascii=False))
-    )
-    sheet_id = cur.lastrowid
-
-    for row in rows:
-        data_json = json.dumps(row, ensure_ascii=False)
-        search_text = " ".join(str(v) for v in row.values() if v)
+        # DB insert
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
 
         cur.execute(
-            "INSERT INTO records (sheet_id, data, search_text) VALUES (?, ?, ?)",
-            (sheet_id, data_json, search_text)
+            "INSERT INTO sheets (filename, columns) VALUES (?, ?)",
+            (file.filename, json.dumps(columns, ensure_ascii=False))
         )
+        sheet_id = cur.lastrowid
 
-    conn.commit()
-    conn.close()
+        for row in rows:
+            data_json = json.dumps(row, ensure_ascii=False)
+            search_text = " ".join(str(v) for v in row.values() if v)
 
-    return jsonify({
-        "success": True,
-        "rows_imported": len(rows),
-        "columns": columns
-    })
+            cur.execute(
+                "INSERT INTO records (sheet_id, data, search_text) VALUES (?, ?, ?)",
+                (sheet_id, data_json, search_text)
+            )
+
+        conn.commit()
+        conn.close()
+
+        # Cleanup temp file
+        os.remove(filepath)
+
+        return jsonify({
+            "success": True,
+            "rows_imported": len(rows),
+            "columns": columns
+        })
+
+    except Exception as e:
+        print("UPLOAD ERROR:", str(e))
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 
 # ─────────────────────────────────────────
-# 🔍 SEARCH (FIXED FORMAT)
+# 🔍 SEARCH
 # ─────────────────────────────────────────
 @app.route("/search", methods=["GET"])
 def search():
@@ -117,6 +136,8 @@ def search():
         formatted_results.append(formatted_record)
 
     return jsonify(formatted_results)
+
+
 # ─────────────────────────────────────────
 # 📋 LIST SHEETS
 # ─────────────────────────────────────────
@@ -147,18 +168,13 @@ def delete_sheet(sheet_id):
     cur = conn.cursor()
 
     try:
-        # Get record IDs
         cur.execute("SELECT id FROM records WHERE sheet_id = ?", (sheet_id,))
         record_ids = [row[0] for row in cur.fetchall()]
 
-        # Delete from FTS
         for rid in record_ids:
             cur.execute("DELETE FROM records_fts WHERE rowid = ?", (rid,))
 
-        # Delete records
         cur.execute("DELETE FROM records WHERE sheet_id = ?", (sheet_id,))
-
-        # Delete sheet
         cur.execute("DELETE FROM sheets WHERE id = ?", (sheet_id,))
 
         conn.commit()
@@ -176,6 +192,14 @@ def delete_sheet(sheet_id):
 
     finally:
         conn.close()
+
+
+# ─────────────────────────────────────────
+# 🚀 HEALTH CHECK (IMPORTANT for Render)
+# ─────────────────────────────────────────
+@app.route("/", methods=["GET"])
+def home():
+    return "Backend is running ✅"
 
 
 # ─────────────────────────────────────────
