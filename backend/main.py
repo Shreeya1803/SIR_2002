@@ -9,6 +9,9 @@ from database import init_db, DB_PATH
 from parser import parse_excel
 from search import search_records
 
+
+
+
 def normalize_key(key):
     return key.strip().lower().replace(" ", "").replace(".", "")
 
@@ -199,8 +202,7 @@ def delete_sheet(sheet_id):
 # ─────────────────────────────────────────
 @app.route("/", methods=["GET"])
 def home():
-    return "Backend is running ✅"
-
+    return "Backend is running ✅", 200
 
 # ─────────────────────────────────────────
 # 🚀 START SERVER
