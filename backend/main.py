@@ -1,3 +1,21 @@
+
+import threading
+import requests
+import time
+
+def keep_alive():
+    """Pings this server every 14 minutes to prevent Render from sleeping."""
+    while True:
+        time.sleep(14 * 60)  # wait 14 minutes
+        try:
+            requests.get("https://sir-2002-marathi-backend.onrender.com/sheets")
+            print("Keep-alive ping sent.")
+        except Exception as e:
+            print(f"Keep-alive failed: {e}")
+
+# Add this just before app.run() at the bottom of main.py
+threading.Thread(target=keep_alive, daemon=True).start()
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import sqlite3
@@ -200,16 +218,13 @@ def delete_sheet(sheet_id):
 # ─────────────────────────────────────────
 # 🚀 HEALTH CHECK (IMPORTANT for Render)
 # ─────────────────────────────────────────
-@app.route("/", methods=["GET"])
-def home():
-    return "Backend is running ✅", 200
+@app.route("/ping", methods=["GET"])
+def ping():
+    return jsonify({"status": "alive"})
 
 # ─────────────────────────────────────────
 # 🚀 START SERVER
 # ─────────────────────────────────────────
 if __name__ == "__main__":
-    app.run(
-        host="0.0.0.0",
-        port=int(os.environ.get("PORT", 5000)),
-        debug=True
-    )
+    threading.Thread(target=keep_alive, daemon=True).start()
+    app.run(host="0.0.0.0", port=5000, debug=True)
